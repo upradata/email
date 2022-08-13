@@ -87,7 +87,7 @@ export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun
         console.log(yellow`Dry mode enabled`);
     }
 
-    type CacheData = { lastIndex: number; done: boolean; errors?: { row: number; error: string; }[]; };
+    type CacheData = { lastIndex: number; done: boolean; errors?: { row: number; message: string; error: unknown; }[]; };
     type MetaData = { nb: number; done: boolean; };
     type Cache = { metadata: MetaData; data: Record<string /* csv file name */, CacheData>; };
 
@@ -118,7 +118,7 @@ export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun
         onMailingList: async (emailRecipients, { isPartial, file: csvFile }) => {
             console.log(magenta`Sending mailing list: ${relativeToCwd(csvFile)}`);
             type ResponseSuccess = { type: 'success'; id: string; message: string; i: number; };
-            type ResponseError = { type: 'error'; error: string; i: number; };
+            type ResponseError = { type: 'error'; message: string; error: unknown; i: number; };
             type Response = ResponseSuccess | ResponseError;
 
 
@@ -133,11 +133,11 @@ export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun
 
                 return responses
                     .filter(r => r.type === 'error')
-                    .map((r: ResponseError) => ({ row: r.i, error: r.error }));
+                    .map((r: ResponseError) => ({ row: r.i, ...r /* error: r.error */ }));
 
             });
 
-            errors.forEach(e => console.error(red`${relativeToCwd(csvFile)}:`, yellow`row: ${e.row}\n`, e.error));
+            errors.forEach(e => console.error(red`${relativeToCwd(csvFile)}:`, yellow`row: ${e.row}\n`, e.message));
 
             const { errors: lastErrors = [] } = cachedCsvFiles.data[ csvFile ] || {};
 

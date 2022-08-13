@@ -36,7 +36,7 @@ export const sendEmail = async <P extends EmailProviders = 'mailgun', E extends 
     const sendMail = provider || await createSendMailService<P>(providerName as P, clientOptions);
 
     type ResponseSuccess = { type: 'success'; id: string; message: string; };
-    type ResponseError = { type: 'error'; error: string; };
+    type ResponseError = { type: 'error'; message: string; error: unknown; };
     type Response = ResponseSuccess | ResponseError;
 
 
@@ -96,8 +96,8 @@ export const sendEmail = async <P extends EmailProviders = 'mailgun', E extends 
         }
     };
 
-    return sendMail({ ...emailData(), ...restOptions } as any)
-        .then(r => ({ type: 'sucess', ...r }))
+    return sendMail({ ...emailData(), ...restOptions })
+        .then(r => ({ type: 'sucess', ...(typeof r === 'object' ? r : { value: r }) }))
         .catch((e: unknown) => {
             if (e instanceof EmailCodifiedError)
                 return { type: 'error', message: e.toString(), error: e };
@@ -122,7 +122,7 @@ export const sendEmail = async <P extends EmailProviders = 'mailgun', E extends 
 export const splitNameEmail = (address: string): { name: string; email: string; } => {
 
     // if no email bracket present, return as is
-    if (/</.test(address)) {
+    if (!/</.test(address)) {
         return { name: '', email: address };
     }
 

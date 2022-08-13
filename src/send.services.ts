@@ -1,12 +1,10 @@
 import { keys } from '@upradata/util';
-import { checkEmailOptions } from './check-email-options';
 import { EmailCodifiedError, EmailErrors } from './email-error';
 import {
     createMailgunSendService, createSendgridSendService, createMailchimpSendService,
     MailchimpSendClientOptions, MailgunSendClientOptions, SendgridSendClientOptions,
     MailgunSendData, MailchimpSendData, SendGridSendData
 } from './providers';
-import { MinimalEmailOptions } from './types';
 
 export const emailServiceFactories = {
     mailgun: createMailgunSendService,
@@ -33,7 +31,7 @@ export type EmailSendData = {
 };
 
 
-export type EmailServices<P extends EmailProviders> = { [ K in P ]: Awaited<ReturnType<EmailServiceFactories[ K ]>> };
+export type EmailServices<P extends EmailProviders> = { [ K in P ]: Awaited<ReturnType<EmailServiceFactories[ K ]>>[ 'send' ] };
 
 export const createSendMailServices = async<P extends EmailProviders>(options: { [ K in P ]?: SendClientOptions[ K ] }): Promise<EmailServices<P>> => {
     const mailServices = Object.keys(options) as P[];
@@ -46,13 +44,13 @@ export const createSendMailServices = async<P extends EmailProviders>(options: {
 
         return {
             name: mailService,
-            service: async (emailOptions: MinimalEmailOptions) => {
+            service: async (emailOptions: EmailSendData[ P ]) => {
 
-                const errors = checkEmailOptions(emailOptions);
+                const errors = mailSender.checkSendOptions(emailOptions);
                 if (errors)
                     return Promise.reject(errors);
 
-                return mailSender(emailOptions as any);
+                return mailSender.send(emailOptions);
             }
         };
     }));

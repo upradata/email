@@ -1,5 +1,5 @@
 import Mailgun from 'mailgun.js';
-import MailgunOptions from 'mailgun.js/lib/interfaces/Options';
+import MailgunOptions from 'mailgun.js/interfaces/Options';
 import formData from 'form-data';
 
 export type MailgunClientOptions = Omit<MailgunOptions, 'key'> & { apiKey: string; };

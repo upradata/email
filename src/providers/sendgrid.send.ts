@@ -1,10 +1,14 @@
 import sendgridJs, { MailDataRequired } from '@sendgrid/mail';
+import { ensureArray } from '@upradata/util';
+import { checkEmailOptions } from '../check-email-options';
+import { MailSendService } from './mail-send.service';
 import { SendgridClientOptions } from './sendgrid.api';
 
 export type SendGridSendData = MailDataRequired; /* | MailDataRequired[] */
+type EmailData = SendGridSendData[ 'from' ];
 export type SendgridSendClientOptions = SendgridClientOptions;
 
-export const createSendgridSendService = async (options: SendgridSendClientOptions) => {
+export const createSendgridSendService: MailSendService = async (options: SendgridSendClientOptions) => {
     sendgridJs.setApiKey(options.apiKey);
     await options.setMailService?.(sendgridJs);
 
@@ -15,5 +19,19 @@ export const createSendgridSendService = async (options: SendgridSendClientOptio
         return res[ 0 ];
     };
 
-    return send;
+    return {
+        send,
+        checkSendOptions: (body: SendGridSendData) => {
+            const getAddress = (address: EmailData) => typeof address === 'string' ? address : address.email;
+
+            return checkEmailOptions({
+                ...body,
+                from: getAddress(body.from),
+                to: ensureArray(body.to).map(getAddress),
+                subject: body.subject,
+                text: body.text,
+                html: body.html
+            });
+        }
+    };
 };

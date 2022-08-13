@@ -1,8 +1,11 @@
 /* eslint-disable max-len */
 import Mailgun from 'mailgun.js';
+import { MailgunMessageData } from 'mailgun.js/interfaces/Messages';
 import formData from 'form-data';
 import { dasherize, ensureArray, entries, map } from '@upradata/util';
 import { MailgunClientOptions } from './mailgun.api';
+import { MailSendService } from './mail-send.service';
+import { checkEmailOptions } from '../check-email-options';
 
 export type MailgunSendData = {
     from: string; // Email address for From header
@@ -43,7 +46,7 @@ export type MailgunSendData = {
 };
 
 
-export const optionsToMailgunOptions = (options: MailgunSendData) => {
+export const datasToMailgunDatas = (datas: MailgunSendData): MailgunMessageData => {
 
     const convertToMailgun = (v: any) => typeof v === 'boolean' ? v ? 'yes' : 'no' : v;
 
@@ -52,7 +55,7 @@ export const optionsToMailgunOptions = (options: MailgunSendData) => {
         return map(v, (key, value) => ({ key: `${prefix}:${d(key)}`, value: convertToMailgun(value) }));
     };
 
-    return entries(options).reduce((o, [ k, v ]) => {
+    return entries(datas).reduce((o, [ k, v ]) => {
         if (k === 'to' || k === 'cc' || k === 'bcc')
             return { ...o, [ k ]: ensureArray(v).join(',') };
 
@@ -78,25 +81,27 @@ export const optionsToMailgunOptions = (options: MailgunSendData) => {
         }
 
         return { ...o, [ dasherize(k) ]: convertToMailgun(v) };
-    }, {});
+    }, {} as MailgunMessageData);
 };
 
 
 export type MailgunSendClientOptions = MailgunClientOptions & { domain: string; };
 
-export const createMailgunSendService = (options: MailgunSendClientOptions) => {
+export const createMailgunSendService: MailSendService = (options: MailgunSendClientOptions) => {
     const { apiKey, domain, ...mailgunOptions } = options;
 
     const mailgun = new Mailgun(formData);
     const mg = mailgun.client({ ...mailgunOptions, key: apiKey });
 
-    const send = async (options: MailgunSendData) => {
-        const opts = optionsToMailgunOptions(options);
-        type Res = { id: string; message: string; };
-        const res: Res = await mg.messages.create(domain, opts);
+    const send = async (datas: MailgunSendData) => {
+        const emailDatas = datasToMailgunDatas(datas);
 
+        const res = await mg.messages.create(domain, emailDatas);
         return res;
     };
 
-    return send;
+    return {
+        send,
+        checkSendOptions: (body: MailgunSendData) => checkEmailOptions(body)
+    };
 };

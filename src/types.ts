@@ -1,8 +1,8 @@
 
 export interface MinimalEmailOptions {
     from: string;
-    to: string;
-    subject: string;
+    to: string | string[];
+    subject?: string;
     text?: string;
     html?: string;
 }
