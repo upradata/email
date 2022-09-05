@@ -4,8 +4,9 @@ import { MailgunMessageData } from 'mailgun.js/interfaces/Messages';
 import formData from 'form-data';
 import { dasherize, ensureArray, entries, map } from '@upradata/util';
 import { MailgunClientOptions } from './mailgun.api';
-import { MailSendService } from './mail-send.service';
+import { MailSendServiceFactory } from './mail-send.service';
 import { checkEmailOptions } from '../check-email-options';
+import { EmailCodifiedError, EmailErrors } from '../email-error';
 
 export type MailgunSendData = {
     from: string; // Email address for From header
@@ -87,21 +88,43 @@ export const datasToMailgunDatas = (datas: MailgunSendData): MailgunMessageData 
 
 export type MailgunSendClientOptions = MailgunClientOptions & { domain: string; };
 
-export const createMailgunSendService: MailSendService = (options: MailgunSendClientOptions) => {
+export const createMailgunSendService: MailSendServiceFactory<MailgunSendClientOptions, MailgunSendData> = options => {
     const { apiKey, domain, ...mailgunOptions } = options;
 
     const mailgun = new Mailgun(formData);
     const mg = mailgun.client({ ...mailgunOptions, key: apiKey });
 
     const send = async (datas: MailgunSendData) => {
-        const emailDatas = datasToMailgunDatas(datas);
+        try {
+            const emailDatas = datasToMailgunDatas(datas);
 
-        const res = await mg.messages.create(domain, emailDatas);
-        return res;
+            const res = await mg.messages.create(domain, emailDatas);
+            return [ {
+                ...res,
+                type: 'success' as const,
+                id: res.id || '',
+                status: `${res.status}`,
+                message: res.message || `email sent to Mailgun server with status "${res.status}"`,
+                to: res.details,
+                hasSendBeenRequested: true
+            } ];
+
+        } catch (e) {
+            return [ {
+                type: 'error' as const,
+                error: new EmailCodifiedError({
+                    code: EmailErrors.MAILCHIMP,
+                    message: e instanceof Error ? e.message : typeof e === 'string' ? e : e?.toString?.() || `Error while sending mail with Mailgun Service`
+                }),
+                to: JSON.stringify(datas.to),
+                hasSendBeenRequested: true
+            } ];
+        }
     };
 
     return {
         send,
-        checkSendOptions: (body: MailgunSendData) => checkEmailOptions(body)
+        checkSendOptions: (body: MailgunSendData) => checkEmailOptions(body),
+        isMarketing: false
     };
 };

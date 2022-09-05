@@ -7,7 +7,9 @@ export enum EmailErrors {
     WRONG_FORMAT = 'upradata-error/wrong-format',
     SENDMAIL = 'upradata-error/sendmail-error',
     MAILGUN = 'upradata-error/mailgun-error',
-    SENDGRID = 'upradata-error/sendgrid-error'
+    SENDGRID = 'upradata-error/sendgrid-error',
+    MAILCHIMP = 'upradata-error/mailchimp-error',
+    MANDRILL = 'upradata-error/mandrill-error',
 }
 
 

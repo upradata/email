@@ -1,10 +1,8 @@
-import mailchimp from '@mailchimp/mailchimp_transactional';
+import mailchimp, { Config } from '@mailchimp/mailchimp_marketing';
 
-export type MailchimpClientOptions = {
-    apiKey: string;
-};
+export type MailchimpClientOptions = Config;
 
 export const createMailchimpApiService = async (options: MailchimpClientOptions) => {
-    const client = mailchimp(options.apiKey);
-    return client;
+    mailchimp.setConfig(options);
+    return mailchimp;
 };

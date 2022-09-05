@@ -1,15 +1,16 @@
-import { keys } from '@upradata/util';
+import { keys, ValueOf } from '@upradata/util';
 import { EmailCodifiedError, EmailErrors } from './email-error';
 import {
-    createMailgunSendService, createSendgridSendService, createMailchimpSendService,
-    MailchimpSendClientOptions, MailgunSendClientOptions, SendgridSendClientOptions,
-    MailgunSendData, MailchimpSendData, SendGridSendData
+    createMailgunSendService, createSendgridSendService, createMandrillSendService,
+    MandrillSendClientOptions, MailgunSendClientOptions, SendgridSendClientOptions,
+    MailgunSendData, MandrillSendData, SendGridSendData, MailSendService, MailSendServiceFactory, createMilchimpSendService, MailchimpSendClientOptions, MailchimpSendData
 } from './providers';
 
 export const emailServiceFactories = {
     mailgun: createMailgunSendService,
     sendgrid: createSendgridSendService,
-    mailchimp: createMailchimpSendService
+    mandrill: createMandrillSendService,
+    mailchimp: createMilchimpSendService
 } as const;
 
 
@@ -21,17 +22,20 @@ export const emailProviders = keys(emailServiceFactories);
 export type SendClientOptions = {
     mailgun?: MailgunSendClientOptions;
     sendgrid?: SendgridSendClientOptions;
+    mandrill?: MandrillSendClientOptions;
     mailchimp?: MailchimpSendClientOptions;
 };
 
 export type EmailSendData = {
     mailgun?: MailgunSendData;
     sendgrid?: SendGridSendData;
+    mandrill?: MandrillSendData;
     mailchimp?: MailchimpSendData;
 };
 
 
-export type EmailServices<P extends EmailProviders> = { [ K in P ]: Awaited<ReturnType<EmailServiceFactories[ K ]>>[ 'send' ] };
+// export type EmailServices<P extends EmailProviders> = { [ K in P ]: Awaited<ReturnType<EmailServiceFactories[ K ]>>[ 'send' ] };
+export type EmailServices<P extends EmailProviders> = { [ K in P ]: MailSendService<EmailSendData[ K ]> };
 
 export const createSendMailServices = async<P extends EmailProviders>(options: { [ K in P ]?: SendClientOptions[ K ] }): Promise<EmailServices<P>> => {
     const mailServices = Object.keys(options) as P[];
@@ -40,11 +44,13 @@ export const createSendMailServices = async<P extends EmailProviders>(options: {
         throw new EmailCodifiedError({ code: EmailErrors.SENDMAIL, message: `A mail service has to be provided: ${keys(emailServiceFactories).join(', ')}` });
 
     const sendMails = await Promise.all(mailServices.map(async mailService => {
-        const mailSender = await emailServiceFactories[ mailService ](options[ mailService ] as any);
+        const factory = emailServiceFactories[ mailService ] as any as MailSendServiceFactory<ValueOf<SendClientOptions>, EmailSendData[ EmailProviders ]>;
+        const mailSender = await factory(options[ mailService ]);
 
         return {
             name: mailService,
-            service: async (emailOptions: EmailSendData[ P ]) => {
+            mailSender,
+            send: async (emailOptions: EmailSendData[ P ]) => {
 
                 const errors = mailSender.checkSendOptions(emailOptions);
                 if (errors)
@@ -55,7 +61,7 @@ export const createSendMailServices = async<P extends EmailProviders>(options: {
         };
     }));
 
-    return sendMails.reduce((o, { name, service }) => ({ ...o, [ name ]: service }), {}) as any;
+    return sendMails.reduce((o, { name, mailSender, send }) => ({ ...o, [ name ]: { ...mailSender, send } }), {} as EmailServices<P>);
 };
 
 

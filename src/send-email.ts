@@ -2,7 +2,8 @@
 import { minify } from 'html-minifier-terser';
 import { ensureArray } from '@upradata/util';
 import { EmailProviders, SendClientOptions, createSendMailService, EmailSendData, EmailServices } from './send.services';
-import { EmailCodifiedError } from './email-error';
+import { EmailCodifiedError, EmailErrors } from './email-error';
+import { SendReturn } from './providers';
 
 export type EmailData<Extra = {}> = Extra & {
     subject: string;
@@ -13,107 +14,170 @@ export type EmailData<Extra = {}> = Extra & {
     dry?: boolean;
     tag?: string | string[];
     deliveryTime?: string;
+    contact?: {
+        address: string;
+        city: string;
+        company: string;
+        country: string;
+        state: string;
+        zip: string;
+    };
+    list?: {
+        name?: string;
+        id?: string;
+    };
+    template?: { name: string; };
+    campaign?: { name: string; };
 };
 
-export type EmailProviderOptions<P extends EmailProviders = 'mailgun'> = { providerName: P; provider?: EmailServices<P>[ P ]; options?: SendClientOptions[ P ]; };
-
-export const sendEmail = async <P extends EmailProviders = 'mailgun', E extends Partial<EmailSendData[ P ]> = {}>(options: EmailProviderOptions<P>, data: EmailData<E>) => {
-    const { providerName = 'mailgun', provider, options: clientOptions } = options;
-    const { html, text, dry, deliveryTime, subject, from, tag, to, ...restOptions } = data;
-
-
-    const minimizedHtml = await minify(html, {
-        collapseWhitespace: true,
-        removeComments: true,
-        removeScriptTypeAttributes: true,
-        removeStyleLinkTypeAttributes: true,
-        useShortDoctype: true,
-        minifyCSS: true,
-        minifyJS: true
-    });
+export type EmailProviderOptions<P extends EmailProviders = 'mailgun'> = {
+    providerName: P;
+    provider?: EmailServices<P>[ P ];
+    options?: SendClientOptions[ P ];
+    isLast?: boolean;
+};
 
 
-    const sendMail = provider || await createSendMailService<P>(providerName as P, clientOptions);
+/* type ResponseSuccess = { type: 'success'; id: string; message: string; };
+type ResponseError = { type: 'error'; message: string; error: EmailCodifiedError; };
+type Response = ResponseSuccess | ResponseError;
+ */
+export type SendEmailReturn = { result: SendReturn[]; isMarketing: boolean; };
 
-    type ResponseSuccess = { type: 'success'; id: string; message: string; };
-    type ResponseError = { type: 'error'; message: string; error: unknown; };
-    type Response = ResponseSuccess | ResponseError;
+export const sendEmail = async <P extends EmailProviders = 'mailgun', E extends Partial<EmailSendData[ P ]> = {}>(
+    options: EmailProviderOptions<P>, data: EmailData<E>
+): Promise<SendEmailReturn> => {
+
+    const { providerName = 'mailgun', provider, options: clientOptions, isLast } = options;
+    const { html, text, dry, deliveryTime, subject, from, tag, to, contact, list, template, campaign, ...restOptions } = data;
+    let sendMail: EmailServices<P>[ P ] = undefined;
+
+    try {
+
+        const minimizedHtml = await minify(html, {
+            collapseWhitespace: true,
+            removeComments: true,
+            removeScriptTypeAttributes: true,
+            removeStyleLinkTypeAttributes: true,
+            useShortDoctype: true,
+            minifyCSS: true,
+            minifyJS: true
+        });
 
 
-    const emailData = (): EmailSendData[ P ] => {
-        const message = {
-            to,
-            from,
-            subject,
-            text,
-            html: minimizedHtml,
-        };
+        sendMail = provider || await createSendMailService<P>(providerName as P, clientOptions);
 
-        if (providerName === 'mailgun') {
-            return {
-                ...message,
-                options: {
-                    tag,
-                    deliverytime: deliveryTime,
-                    tracking: true,
-                    trackingClicks: true,
-                    trackingOpens: true,
-                    dkim: true,
-                    testmode: dry
-                }
-            } as EmailSendData[ 'mailgun' ] as EmailSendData[ P ];
-        }
 
-        if (providerName === 'sendgrid') {
-            return {
-                ...message,
-                trackingSettings: {
-                    clickTracking: { enable: true },
-                    openTracking: { enable: true },
-                    ganalytics: { enable: false }
-                },
-                sendAt: 1
-            } as EmailSendData[ 'mailgun' ] as EmailSendData[ P ];
-        }
+        const emailData = (): EmailSendData[ P ] => {
+            const message = {
+                to,
+                from,
+                subject,
+                text,
+                html: minimizedHtml,
+            };
 
-        if (providerName === 'mailchimp') {
-            const { from, to, ...mess } = message;
-
-            const { name: from_name, email: from_email } = splitNameEmail(from);
-
-            return {
-                message: {
-                    ...mess,
-                    from_email,
-                    from_name,
-                    to: ensureArray(to).map(address => ({ ...splitNameEmail(address), type: 'to' }))
-                },
-                tags: ensureArray(tag),
-                track_opens: true,
-                track_clicks: true,
-                send_at: '',
-            } as EmailSendData[ 'mailchimp' ] as EmailSendData[ P ];
-        }
-    };
-
-    return sendMail({ ...emailData(), ...restOptions })
-        .then(r => ({ type: 'sucess', ...(typeof r === 'object' ? r : { value: r }) }))
-        .catch((e: unknown) => {
-            if (e instanceof EmailCodifiedError)
-                return { type: 'error', message: e.toString(), error: e };
-
-            if (e instanceof Error) {
-                const err = e as Error & { details?: any; };
-                const details = () => {
-                    try { return JSON.parse(err.details); } catch (_e) { return err.details; }
-                };
-
-                const message = err.details ? [ `message: ${err.message}`, `details: ${details()}` ] : err.message;
-                return { type: 'error', message, error: e };
+            if (providerName === 'mailgun') {
+                return {
+                    ...message,
+                    options: {
+                        tag,
+                        deliverytime: deliveryTime,
+                        tracking: true,
+                        trackingClicks: true,
+                        trackingOpens: true,
+                        dkim: true,
+                        testmode: dry
+                    }
+                } as EmailSendData[ 'mailgun' ] as EmailSendData[ P ];
             }
 
-            return { type: 'error', message: e.toString(), error: e };
-        }) as Promise<Response>;
+            if (providerName === 'sendgrid') {
+                return {
+                    ...message,
+                    trackingSettings: {
+                        clickTracking: { enable: true },
+                        openTracking: { enable: true },
+                        ganalytics: { enable: false }
+                    },
+                    sendAt: 1
+                } as EmailSendData[ 'mailgun' ] as EmailSendData[ P ];
+            }
+
+            if (providerName === 'mandrill') {
+                const { from, to, ...mess } = message;
+
+                const { name: from_name, email: from_email } = splitNameEmail(from);
+
+                return {
+                    message: {
+                        ...mess,
+                        from_email,
+                        from_name,
+                        to: ensureArray(to).map(address => ({ ...splitNameEmail(address), type: 'to' }))
+                    },
+                    tags: ensureArray(tag),
+                    track_opens: true,
+                    track_clicks: true,
+                    send_at: '',
+                } as EmailSendData[ 'mandrill' ] as EmailSendData[ P ];
+            }
+
+            if (providerName === 'mailchimp') {
+
+                const { name: fromName, email: fromEmail } = splitNameEmail(message.from);
+                const { name: toName, email: toEmail } = splitNameEmail(message.to as string);
+
+                return {
+                    from: { email: fromEmail, name: fromName },
+                    to: { email: toEmail, firstName: toName, lastName: '' /* toName */ },
+                    html: message.html,
+                    text: message.text,
+                    // folder: 'asso',
+                    subject: message.subject,
+                    contact: {
+                        ...contact,
+                        address1: contact.address
+                    },
+                    audience: list,
+                    templateName: template.name,
+                    campaignName: campaign.name,
+                    isLastContact: true
+                } as EmailSendData[ 'mailchimp' ] as EmailSendData[ P ];
+            }
+        };
+
+        const emailOptions = { ...emailData(), ...restOptions };
+        return sendMail.send({ ...emailOptions, isLastContact: isLast }).then(result => ({ result, isMarketing: sendMail.isMarketing }));
+
+    } catch (e) {
+        return {
+            result: [ {
+                type: 'error' as const,
+                error: new EmailCodifiedError({
+                    code: EmailErrors.MAILCHIMP,
+                    message: e instanceof Error ? e.message : typeof e === 'string' ? e : e?.toString?.() || `Error while sending mail`
+                }),
+                to: JSON.stringify(to),
+                hasSendBeenRequested: false
+            } ],
+            isMarketing: sendMail?.isMarketing,
+        };
+        /*  if (e instanceof EmailCodifiedError)
+             return { type: 'error', message: e.toString(), error: e };
+
+         if (e instanceof Error) {
+             const err = e as Error & { details?: any; };
+             const details = () => {
+                 try { return JSON.parse(err.details); } catch (_e) { return err.details; }
+             };
+
+             const message = err.details ? [ `message: ${err.message}`, `details: ${details()}` ] : err.message;
+             return { type: 'error', message, error: e };
+         }
+
+         return { type: 'error', message: e.toString(), error: e }; */
+    }
 };
 
 
