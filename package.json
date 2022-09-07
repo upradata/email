@@ -55,8 +55,8 @@
         "fs-extra": "^10.1.0",
         "html-minifier-terser": "7.0.0-beta.0",
         "mailgun.js": "^8.0.0",
-        "@upradata/util": "^16.0.2",
-        "@upradata/node-util": "^16.0.11"
+        "@upradata/util": "^16.0.3",
+        "@upradata/node-util": "^16.0.12"
     },
     "devDependencies": {
         "@types/fs-extra": "^9.0.13",
@@ -66,8 +66,8 @@
     },
     "local": {
         "dependencies": {
-            "@upradata/util": "link:/home/milottit/Libraries/Upra-Data/util@16.0.2",
-            "@upradata/node-util": "link:/home/milottit/Libraries/Upra-Data/node-util@16.0.11"
+            "@upradata/util": "link:/home/milottit/Libraries/Upra-Data/util@16.0.3",
+            "@upradata/node-util": "link:/home/milottit/Libraries/Upra-Data/node-util@16.0.12"
         },
         "usedBy": {
             "annuaire-clubs-associations": "/home/milottit/Projects/upradata-website/annuaire-associations"
