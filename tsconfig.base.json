@@ -16,9 +16,16 @@
         "target": "ESNext",
         "traceResolution": false,
         "baseUrl": ".",
-        "paths": {},
+        "paths": {
+            "@mailchimp/mailchimp_marketing": [
+                "./src/@types/@mailchimp/mailchimp_marketing"
+            ],
+            "@mailchimp/mailchimp_marketing/*": [
+                "./src/@types/@mailchimp/mailchimp_marketing/*"
+            ]
+        },
         "typeRoots": [
-            "src/@types",
+            /* "./@types", */
             "node_modules/@types"
         ]
     }

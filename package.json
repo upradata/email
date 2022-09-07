@@ -23,7 +23,7 @@
     "homepage": "",
     "bin": "",
     "license": "MIT",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "",
     "sideEffects": false,
     "main": "lib",
@@ -47,6 +47,7 @@
         "npm-publish": "npm run build && npm publish --access public"
     },
     "dependencies": {
+        "@mailchimp/mailchimp_marketing": "^3.0.78",
         "@mailchimp/mailchimp_transactional": "^1.0.47",
         "@sendgrid/client": "^7.7.0",
         "@sendgrid/mail": "^7.7.0",

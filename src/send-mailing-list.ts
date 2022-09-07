@@ -4,76 +4,106 @@ import fs from 'fs-extra';
 import { getFiles, csvToJson, yellow, green, red, magenta, fromCwd } from '@upradata/node-util';
 import { ensureArray, TT$ } from '@upradata/util';
 import { EmailProviders, EmailSendData, EmailServices } from './send.services';
-import { EmailData, sendEmail } from './send-email';
+import { EmailData, sendEmail, SendEmailReturn } from './send-email';
+import { SendReturnError, SendReturnSuccess } from './providers';
+
 
 const relativeToCwd = (p: string) => path.relative(process.cwd(), p);
 
-
-export type EmailRecipient = { to: string; name: string; };
-export type MailingListData<T = {}> = EmailRecipient & T;
+export type MailingListData<T = {}> = T;
 
 
-type GetMailingListOptions = {
+type AfterMailingListCallback = () => TT$<void>;
+
+type GetMailingListOptions<T = {}> = {
     mailingListCsvFiles?: string[];
     max?: number;
-    onMailingList: (recipients: (EmailRecipient & { i: number; })[], options: { isPartial: boolean; file: string; }) => TT$<void>;
-    cacheInfo?: (csvFile: string) => { isDone: boolean; lastIndex: number; };
+    retryErrors?: boolean;
+    onMailingList: (emailsData: MailingListData<T & { i: number; }>[], options: {
+        isPartial: boolean;
+        file: string;
+        isLast: boolean;
+    }) => TT$<void | AfterMailingListCallback>;
+    cacheInfo?: (csvFile: string) => { isDone: boolean; lastIndex: number; errors: CacheData[ 'errors' ]; };
 };
 
 
-const getMailingList = async (options: GetMailingListOptions): Promise<void> => {
+const getMailingList = async <T = {}>(options: GetMailingListOptions<T>): Promise<AfterMailingListCallback> => {
     const { mailingListCsvFiles, max = Infinity, onMailingList, cacheInfo } = options;
 
-    const filesIt = mailingListCsvFiles[ Symbol.iterator ]();
+    const getEmails = async (i: number, totalDone: number): Promise<Array<() => void>> => {
+        if (i === mailingListCsvFiles.length)
+            return [];
 
-    const getEmails = async (totalDone: number) => {
-        const { done, value: filepath } = filesIt.next() as IteratorResult<string, string>;
+        const filepath = mailingListCsvFiles[ i ];
 
-        if (done)
-            return;
+        const { isDone, lastIndex, errors } = cacheInfo(filepath);
 
-        const { isDone, lastIndex } = cacheInfo(filepath);
-
-        if (isDone)
-            return getEmails(totalDone);
-
-        const rows = await csvToJson<MailingListData>(filepath);
-        const emailRecipients = rows.map((row, i) => ({ ...row, i })).slice(lastIndex + 1);
-
-        const nextTotalDone = totalDone + emailRecipients.length;
-
-        if (nextTotalDone >= max) {
-            const size = max - totalDone;
-            await onMailingList(emailRecipients.slice(0, size), { isPartial: true, file: filepath });
-            return;
+        if (isDone) {
+            console.log(yellow`${relativeToCwd(filepath)} cached and previously sent`);
+            return getEmails(i + 1, totalDone);
         }
 
-        await onMailingList(emailRecipients, { isPartial: false, file: filepath });
-        return getEmails(nextTotalDone);
+        const rows = (await csvToJson<MailingListData<T>>(filepath)).map((row, i) => ({ ...row, i }));
+        const errorRows = errors ? rows.filter(({ i }) => errors.some(e => e.row === i)) : [];
+
+        const emailDatas = errorRows.length === 0 ? lastIndex === 0 ? rows : rows.slice(lastIndex + 1) : errorRows;
+        // errorRows.concat(lastIndex === 0 ? rows : rows.slice(lastIndex + 1));
+
+        const nextTotalDone = totalDone + emailDatas.length;
+
+        const processMailingList = () => {
+            if (nextTotalDone > max) {
+                const size = max - totalDone;
+                return onMailingList(emailDatas.slice(0, size), { isPartial: true, file: filepath, isLast: true });
+            }
+
+            return onMailingList(emailDatas, {
+                isPartial: false,
+                file: filepath,
+                isLast: i === mailingListCsvFiles.length - 1
+            });
+        };
+
+        const fn = await processMailingList();
+        const fns = await getEmails(i + 1, nextTotalDone);
+
+        return fn ? [ fn, ...fns ] : fns;
     };
 
-    return getEmails(0);
+    return async () => {
+        const fns = await getEmails(0, 0);
+        await Promise.all(fns.map(fn => fn()));
+    };
 };
 
 
 
-export type EmailsData<Extra = {}> = (recipient: Pick<EmailRecipient, 'name'>) => TT$<Omit<EmailData<Extra>, 'to'>>;
+export type GetBody<T = {}, P extends EmailProviders = EmailProviders> = (emailData: MailingListData<T>) => TT$<EmailData<Partial<EmailSendData[ P ]>>>;
 
-export type SendEmailsToMailingListOptions<P extends EmailProviders = EmailProviders, Extra = {}> = {
-    data: EmailsData<Extra>;
+export type SendEmailsToMailingListOptions<P extends EmailProviders = EmailProviders, T = {}> = {
+    getBody: GetBody<T, P>;
     mailingList: string | string[];
     cache?: string;
     dry?: boolean;
     deliveryTime?: string;
     nb?: number;
+    retryErrors?: boolean;
     providerName: P;
     provider?: EmailServices<P>[ P ];
 };
 
 
-export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun', E extends Partial<EmailSendData[ P ]> = {}>(options: SendEmailsToMailingListOptions<P, E>) => {
+type CacheData = { lastIndex: number; done: boolean; errors?: { row: number; message: string; error: unknown; }[]; };
+type MetaData = { nb: number; done: boolean; };
+type Cache = { metadata: MetaData; data: Record<string /* csv file name */, CacheData>; };
+
+
+export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun', T = {} /* , T extends Partial<EmailSendData[ P ]> = {} */>(
+    options: SendEmailsToMailingListOptions<P, T>
+) => {
     const {
-        data,
+        getBody,
         deliveryTime,
         provider,
         providerName,
@@ -81,15 +111,13 @@ export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun
         cache = fromCwd('send.cache.json'),
         dry = false,
         nb: max = Infinity,
+        retryErrors
     } = options;
 
     if (dry) {
         console.log(yellow`Dry mode enabled`);
     }
 
-    type CacheData = { lastIndex: number; done: boolean; errors?: { row: number; message: string; error: unknown; }[]; };
-    type MetaData = { nb: number; done: boolean; };
-    type Cache = { metadata: MetaData; data: Record<string /* csv file name */, CacheData>; };
 
     const cachedCsvFiles = (
         await fs.readJson(cache).catch(_e => ({ metadata: { nb: 0, done: false }, data: {} } as Cache))
@@ -108,51 +136,101 @@ export const sendEmailToMailingList = async <P extends EmailProviders = 'mailgun
         return m;
     }));
 
-    await getMailingList({
+    const delayedSave = await getMailingList<T>({
         mailingListCsvFiles: mailingLists.flat(),
         max,
+        retryErrors,
         cacheInfo: csvFile => {
             const cacheData = cachedCsvFiles.data[ csvFile ];
-            return { isDone: cacheData?.done, lastIndex: cacheData?.lastIndex ?? 0 };
+            return { isDone: cacheData?.done, lastIndex: cacheData?.lastIndex ?? 0, errors: cacheData.errors };
         },
-        onMailingList: async (emailRecipients, { isPartial, file: csvFile }) => {
+        onMailingList: async (emailsData, { isPartial, file: csvFile, isLast }) => {
             console.log(magenta`Sending mailing list: ${relativeToCwd(csvFile)}`);
-            type ResponseSuccess = { type: 'success'; id: string; message: string; i: number; };
-            type ResponseError = { type: 'error'; message: string; error: unknown; i: number; };
-            type Response = ResponseSuccess | ResponseError;
 
+            const { successes, errors, isMarketing } = await Promise.allSettled(emailsData.map(async (emailData, index) => {
+                const { i } = emailData;
 
-            const errors = await Promise.allSettled(emailRecipients.map(async recipient => {
-                const { /* name, */ to, i } = recipient;
-                const emailData = await data({ name: recipient.name });
+                const returnError = (e: unknown, to: string) => (e as any).result ? { ...(e as SendEmailReturn), i } : ({
+                    result: [ {
+                        type: 'error',
+                        error: e instanceof Error ? e : new Error(JSON.stringify(e)),
+                        to,
+                    } ],
+                    isMarketing: false,
+                    i
+                } as SendEmailReturn & { i: number; });
 
-                return sendEmail({ providerName, provider }, { to: to.split('/').join(','), dry, deliveryTime, ...(emailData as any) }).then(res => ({ ...res, i }));
+                try {
+                    const body = await getBody(emailData);
+
+                    return sendEmail({
+                        providerName,
+                        provider,
+                        isLast: isLast && index === emailsData.length - 1
+                    }, {
+                        to: body.to,
+                        dry,
+                        deliveryTime,
+                        tag: [ ...(body.tag || []), path.parse(csvFile).name ],
+                        ...(body as any)
+                    })
+                        .then(res => ({ ...res, i: emailData.i }))
+                        .catch(err => returnError(err, JSON.stringify(body.to)));
+                } catch (e) {
+                    return returnError(e, JSON.stringify((emailData as any).email || '???'));
+                }
             })).then(async results => {
 
-                const responses = results.filter(r => r.status === 'fulfilled').map((r: PromiseFulfilledResult<Response>) => r.value);
+                const responses = results.filter(r => r.status === 'fulfilled').map((r: PromiseFulfilledResult<SendEmailReturn & { i: number; }>) => r.value);
 
-                return responses
-                    .filter(r => r.type === 'error')
-                    .map((r: ResponseError) => ({ row: r.i, ...r /* error: r.error */ }));
+                const errors = responses.reduce<(SendReturnError & { row: number; })[]>((errors, { result, i }) => {
+                    const resErrors = result.filter(r => r.type === 'error') as SendReturnError[];
+                    return [ ...errors, ...resErrors.map(r => ({ ...r, row: i })) ];
+                }, []);
 
+                const successes = responses.reduce<(SendReturnSuccess & { row: number; })[]>((r, { result, i }) => {
+                    const sucessResults = result.filter(r => r.type === 'success') as SendReturnSuccess[];
+                    return [ ...r, ...sucessResults.map(r => ({ ...r, row: i })) ];
+                }, []);
+
+                return { errors, successes, isMarketing: responses[ 0 ]?.isMarketing };
             });
 
-            errors.forEach(e => console.error(red`${relativeToCwd(csvFile)}:`, yellow`row: ${e.row}\n`, e.message));
+            errors.forEach(({ error, row, to }) => {
+                process.stdout.write(red`${relativeToCwd(csvFile)}:`);
+                process.stdout.write(yellow`row: ${row}\n`);
+                console.error(`${error.message} (to: ${to})`);
+            });
 
             const { errors: lastErrors = [] } = cachedCsvFiles.data[ csvFile ] || {};
+            const lastUnresolvedErrors = lastErrors.filter(e => errors.some(err => err.row !== e.row) || !successes.some(s => s.row === e.row));
 
-            cachedCsvFiles.data[ csvFile ] = {
-                errors: [ ...lastErrors, ...errors ],
-                lastIndex: emailRecipients.at(-1)?.i ?? 0,
+            const cachedData: CacheData = {
+                errors: [ ...lastUnresolvedErrors, ...errors.map(e => ({ message: e.error.message, row: e.row, error: e.error })) ],
+                lastIndex: emailsData.at(-1)?.i ?? 0,
                 done: !isPartial && errors.length === 0
             };
 
-            cachedCsvFiles.metadata.nb += emailRecipients.length;
+            const save = async () => {
+                const isSent = successes.find(s => s.hasSendBeenRequested);
 
-            await fs.writeJson(cache, cachedCsvFiles, { spaces: 4 });
+                if (!isMarketing || isSent) {
+                    cachedCsvFiles.data[ csvFile ] = cachedData;
+                    cachedCsvFiles.metadata.nb += successes.length;
+
+                    await fs.writeJson(cache, cachedCsvFiles, { spaces: 4 });
+                }
+            };
+
+            // when is a marketing email, we wait all "to" addresses have been added to the campaign
+            // and we wait the last request that is sending the campaign before calling save() because
+            // something wrong can happen during sending
+            // For transactional email, all emails are sent one by one even if the "to" addresses is a string[]
+            return isMarketing ? save : save();
         }
     });
 
+    await delayedSave?.();
     console.log(green`${cachedCsvFiles.metadata.nb - lastNb} emails sent`);
 };
 
